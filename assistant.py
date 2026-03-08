@@ -249,7 +249,7 @@ async def productivity_report(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=context.job.chat_id, text=msg)
 
 
-app = ApplicationBuilder().token("8602038532:AAFgGowucCDiM6MTawht2pu8xuCoDjUylFY").build()
+app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT, router))
