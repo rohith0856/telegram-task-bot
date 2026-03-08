@@ -1,206 +1,264 @@
-import sqlite3
 import os
+import sqlite3
 from datetime import datetime, timedelta
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    filters,
     ContextTypes,
-    ConversationHandler
+    filters,
+    CallbackQueryHandler,
 )
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-conn = sqlite3.connect("tasks.db")
+conn = sqlite3.connect("tasks.db", check_same_thread=False)
 c = conn.cursor()
 
-c.execute("""
+c.execute(
+    """
 CREATE TABLE IF NOT EXISTS tasks(
 id INTEGER PRIMARY KEY,
 task TEXT,
+category TEXT,
 date TEXT,
 time TEXT,
-status TEXT
+status TEXT,
+recurring TEXT
 )
-""")
+"""
+)
+
 conn.commit()
 
 main_keyboard = [
-["➕ Add Task","📋 Today Tasks"],
-["📅 All Tasks","✅ Complete Task"]
+    ["➕ Add Task", "📋 Today Tasks"],
+    ["📅 All Tasks", "❌ Delete Task"],
 ]
 
-main_markup = ReplyKeyboardMarkup(main_keyboard,resize_keyboard=True)
+markup = ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
 
-date_keyboard = [
-["📅 Today","📅 Tomorrow"],
-["✏ Custom Date"]
-]
+scheduler = AsyncIOScheduler()
+scheduler.start()
 
-date_markup = ReplyKeyboardMarkup(date_keyboard,resize_keyboard=True)
 
-time_keyboard = [
-["🕕 6:00 PM","🕖 7:00 PM"],
-["🕗 8:00 PM","🕘 9:00 PM"],
-["✏ Custom Time"]
-]
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Task Manager Ready", reply_markup=markup)
 
-time_markup = ReplyKeyboardMarkup(time_keyboard,resize_keyboard=True)
 
-TASK, DATE, TIME = range(3)
+async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Send task name")
+    context.user_data["state"] = "task"
 
-async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Hello Rohith! Task Manager Ready.",
-        reply_markup=main_markup
+
+async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    text = update.message.text
+
+    if text == "➕ Add Task":
+        await add_task(update, context)
+        return
+
+    if context.user_data.get("state") == "task":
+        context.user_data["task"] = text
+
+        keyboard = [
+            [
+                InlineKeyboardButton("📚 Study", callback_data="cat_study"),
+                InlineKeyboardButton("💻 Project", callback_data="cat_project"),
+            ],
+            [
+                InlineKeyboardButton("🏫 College", callback_data="cat_college"),
+                InlineKeyboardButton("🧠 Personal", callback_data="cat_personal"),
+            ],
+        ]
+
+        await update.message.reply_text(
+            "Choose category", reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+        context.user_data["state"] = "category"
+        return
+
+    if text == "📋 Today Tasks":
+
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        rows = c.execute(
+            "SELECT id,task,time FROM tasks WHERE date=? AND status='pending'",
+            (today,),
+        ).fetchall()
+
+        if not rows:
+            await update.message.reply_text("No tasks today")
+            return
+
+        msg = "Today's Tasks\n\n"
+
+        for r in rows:
+            msg += f"{r[0]}. {r[1]} - {r[2]}\n"
+
+        await update.message.reply_text(msg)
+
+    if text == "📅 All Tasks":
+
+        rows = c.execute("SELECT * FROM tasks").fetchall()
+
+        msg = ""
+
+        for r in rows:
+            msg += f"{r[0]}. {r[1]} | {r[3]} {r[4]} ({r[5]})\n"
+
+        await update.message.reply_text(msg)
+
+    if text == "❌ Delete Task":
+
+        await update.message.reply_text("Send task id to delete")
+
+        context.user_data["state"] = "delete"
+
+        return
+
+    if context.user_data.get("state") == "delete":
+
+        c.execute("DELETE FROM tasks WHERE id=?", (text,))
+        conn.commit()
+
+        await update.message.reply_text("Task deleted")
+
+        context.user_data["state"] = None
+
+
+async def category_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    category = query.data.split("_")[1]
+
+    context.user_data["category"] = category
+
+    keyboard = [
+        [
+            InlineKeyboardButton("Today", callback_data="date_today"),
+            InlineKeyboardButton("Tomorrow", callback_data="date_tomorrow"),
+        ]
+    ]
+
+    await query.edit_message_text(
+        "Select date", reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def add_task_start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Task name enter pannunga:")
-    return TASK
 
-async def task_name(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    context.user_data["task"]=update.message.text
+async def date_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    await update.message.reply_text(
-        "Date select pannunga:",
-        reply_markup=date_markup
-    )
+    query = update.callback_query
+    await query.answer()
 
-    return DATE
-
-async def task_date(update:Update,context:ContextTypes.DEFAULT_TYPE):
-
-    text=update.message.text
-
-    if text=="📅 Today":
-        date=datetime.now().strftime("%Y-%m-%d")
-
-    elif text=="📅 Tomorrow":
-        date=(datetime.now()+timedelta(days=1)).strftime("%Y-%m-%d")
+    if query.data == "date_today":
+        date = datetime.now().strftime("%Y-%m-%d")
 
     else:
-        date=text
+        date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    context.user_data["date"]=date
+    context.user_data["date"] = date
 
-    await update.message.reply_text(
-        "Time select pannunga:",
-        reply_markup=time_markup
-    )
+    await query.edit_message_text("Send time like 07:30 PM")
 
-    return TIME
+    context.user_data["state"] = "time"
 
-async def task_time(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-    task=context.user_data["task"]
-    date=context.user_data["date"]
-    time=update.message.text
+async def save_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if context.user_data.get("state") != "time":
+        return
+
+    time = update.message.text
+
+    task = context.user_data["task"]
+    category = context.user_data["category"]
+    date = context.user_data["date"]
 
     c.execute(
-        "INSERT INTO tasks(task,date,time,status) VALUES(?,?,?,?)",
-        (task,date,time,"pending")
+        "INSERT INTO tasks(task,category,date,time,status,recurring) VALUES(?,?,?,?,?,?)",
+        (task, category, date, time, "pending", "none"),
     )
 
     conn.commit()
 
-    await update.message.reply_text(
-        "Task added successfully!",
-        reply_markup=main_markup
-    )
+    await update.message.reply_text("Task added", reply_markup=markup)
 
-    return ConversationHandler.END
+    context.user_data["state"] = None
 
-async def today_tasks(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-    today=datetime.now().strftime("%Y-%m-%d")
+async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
-    rows=c.execute(
-        "SELECT task,time FROM tasks WHERE date=? AND status='pending'",
-        (today,)
-    ).fetchall()
+    now = datetime.now()
 
-    if not rows:
-        await update.message.reply_text("No tasks for today")
-        return
-
-    msg="Today's Tasks\n\n"
-
-    for i,r in enumerate(rows,1):
-        msg+=f"{i}. {r[0]} - {r[1]}\n"
-
-    await update.message.reply_text(msg)
-
-async def all_tasks(update:Update,context:ContextTypes.DEFAULT_TYPE):
-
-    rows=c.execute(
-        "SELECT id,task,date,time,status FROM tasks"
-    ).fetchall()
-
-    msg="All Tasks\n\n"
+    rows = c.execute("SELECT task,date,time FROM tasks WHERE status='pending'").fetchall()
 
     for r in rows:
-        msg+=f"{r[0]}. {r[1]} | {r[2]} | {r[3]} ({r[4]})\n"
 
-    await update.message.reply_text(msg)
+        dt = datetime.strptime(r[1] + " " + r[2], "%Y-%m-%d %I:%M %p")
 
-async def complete_task(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Task ID send pannunga complete panna")
+        diff = (dt - now).total_seconds()
 
-async def mark_done(update:Update,context:ContextTypes.DEFAULT_TYPE):
+        if 0 < diff < 60:
 
-    if update.message.text.isdigit():
+            await context.bot.send_message(
+                chat_id=context.job.chat_id,
+                text=f"Reminder\nTask: {r[0]}\nTime: {r[2]}",
+            )
 
-        task_id=update.message.text
 
-        c.execute(
-            "UPDATE tasks SET status='done' WHERE id=?",
-            (task_id,)
-        )
+async def daily_summary(context: ContextTypes.DEFAULT_TYPE):
 
-        conn.commit()
+    today = datetime.now().strftime("%Y-%m-%d")
 
-        await update.message.reply_text("Task completed!")
+    rows = c.execute(
+        "SELECT task,time FROM tasks WHERE date=? AND status='pending'", (today,)
+    ).fetchall()
 
-async def router(update:Update,context:ContextTypes.DEFAULT_TYPE):
+    msg = "Today's Pending Tasks\n\n"
 
-    text=update.message.text
+    for r in rows:
+        msg += f"{r[0]} - {r[1]}\n"
 
-    if text=="📋 Today Tasks":
-        await today_tasks(update,context)
+    await context.bot.send_message(chat_id=context.job.chat_id, text=msg)
 
-    elif text=="📅 All Tasks":
-        await all_tasks(update,context)
 
-    elif text=="✅ Complete Task":
-        await complete_task(update,context)
+async def productivity_report(context: ContextTypes.DEFAULT_TYPE):
 
-    else:
-        await mark_done(update,context)
+    completed = c.execute(
+        "SELECT COUNT(*) FROM tasks WHERE status='done'"
+    ).fetchone()[0]
 
-conv_handler=ConversationHandler(
+    pending = c.execute(
+        "SELECT COUNT(*) FROM tasks WHERE status='pending'"
+    ).fetchone()[0]
 
-entry_points=[MessageHandler(filters.TEXT & filters.Regex("➕ Add Task"),add_task_start)],
+    msg = f"Today's Productivity\nCompleted: {completed}\nPending: {pending}"
 
-states={
+    await context.bot.send_message(chat_id=context.job.chat_id, text=msg)
 
-TASK:[MessageHandler(filters.TEXT,task_name)],
 
-DATE:[MessageHandler(filters.TEXT,task_date)],
+app = ApplicationBuilder().token("8602038532:AAFgGowucCDiM6MTawht2pu8xuCoDjUylFY").build()
 
-TIME:[MessageHandler(filters.TEXT,task_time)]
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT, router))
+app.add_handler(CallbackQueryHandler(category_handler, pattern="cat_"))
+app.add_handler(CallbackQueryHandler(date_handler, pattern="date_"))
+app.add_handler(MessageHandler(filters.TEXT, save_task))
 
-},
-
-fallbacks=[]
-)
-
-app=ApplicationBuilder().token("8602038532:AAFgGowucCDiM6MTawht2pu8xuCoDjUylFY").build()
-
-app.add_handler(CommandHandler("start",start))
-app.add_handler(conv_handler)
-app.add_handler(MessageHandler(filters.TEXT,router))
+scheduler.add_job(reminder_job, "interval", seconds=30)
+scheduler.add_job(daily_summary, "cron", hour=18, minute=0)
+scheduler.add_job(productivity_report, "cron", hour=21, minute=30)
 
 app.run_polling()
