@@ -2,13 +2,7 @@ import os
 import sqlite3
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -25,7 +19,6 @@ time TEXT,
 status TEXT
 )
 """)
-
 conn.commit()
 
 keyboard = [
@@ -35,10 +28,15 @@ keyboard = [
 
 markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+CHAT_ID = None
 scheduler = AsyncIOScheduler()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    global CHAT_ID
+    CHAT_ID = update.effective_chat.id
+
     await update.message.reply_text(
         "Task Manager Ready",
         reply_markup=markup
@@ -58,6 +56,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "|" in text:
 
         try:
+
             task, date, time = [x.strip() for x in text.split("|")]
 
             cursor.execute(
@@ -94,35 +93,13 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(msg)
 
-    if text == "📅 All Tasks":
-
-        rows = cursor.execute("SELECT * FROM tasks").fetchall()
-
-        msg = ""
-
-        for r in rows:
-            msg += f"{r[0]}. {r[1]} | {r[2]} {r[3]} ({r[4]})\n"
-
-        await update.message.reply_text(msg)
-
-    if text == "❌ Delete Task":
-
-        await update.message.reply_text("Send task id to delete")
-
-        context.user_data["delete"] = True
-        return
-
-    if context.user_data.get("delete"):
-
-        cursor.execute("DELETE FROM tasks WHERE id=?", (text,))
-        conn.commit()
-
-        await update.message.reply_text("Task deleted")
-
-        context.user_data["delete"] = False
-
 
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
+
+    global CHAT_ID
+
+    if CHAT_ID is None:
+        return
 
     now = datetime.now()
 
@@ -144,7 +121,7 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
             if 0 < diff < 60:
 
                 await context.bot.send_message(
-                    chat_id=context.job.chat_id,
+                    chat_id=CHAT_ID,
                     text=f"Reminder\nTask: {r[0]}\nTime: {r[2]}"
                 )
 
@@ -152,50 +129,9 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-async def daily_summary(context: ContextTypes.DEFAULT_TYPE):
-
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    rows = cursor.execute(
-        "SELECT task,time FROM tasks WHERE date=? AND status='pending'",
-        (today,)
-    ).fetchall()
-
-    msg = "Today's Pending Tasks\n\n"
-
-    for r in rows:
-        msg += f"{r[0]} - {r[1]}\n"
-
-    await context.bot.send_message(
-        chat_id=context.job.chat_id,
-        text=msg
-    )
-
-
-async def productivity_report(context: ContextTypes.DEFAULT_TYPE):
-
-    completed = cursor.execute(
-        "SELECT COUNT(*) FROM tasks WHERE status='done'"
-    ).fetchone()[0]
-
-    pending = cursor.execute(
-        "SELECT COUNT(*) FROM tasks WHERE status='pending'"
-    ).fetchone()[0]
-
-    msg = f"Productivity Report\nCompleted: {completed}\nPending: {pending}"
-
-    await context.bot.send_message(
-        chat_id=context.job.chat_id,
-        text=msg
-    )
-
-
 async def post_init(application):
 
     scheduler.add_job(reminder_job, "interval", seconds=30)
-    scheduler.add_job(daily_summary, "cron", hour=18, minute=0)
-    scheduler.add_job(productivity_report, "cron", hour=21, minute=30)
-
     scheduler.start()
 
 
