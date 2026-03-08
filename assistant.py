@@ -76,7 +76,7 @@ async def message_handler(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("Task completed")
 
-app=ApplicationBuilder().token("8602038532:AAGW0-d3ME7R3TuJVo6yQtHUZGfwrr5Abkc").build()
+app=ApplicationBuilder().token("8602038532:AAFgGowucCDiM6MTawht2pu8xuCoDjUylFY").build()
 
 app.add_handler(CommandHandler("start",start))
 app.add_handler(MessageHandler(filters.TEXT,message_handler))
