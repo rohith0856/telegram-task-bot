@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -26,19 +27,34 @@ status TEXT
 """)
 conn.commit()
 
-keyboard = [
+main_keyboard = [
 ["➕ Add Task","📋 Today Tasks"],
 ["📅 All Tasks","✅ Complete Task"]
 ]
 
-reply_markup = ReplyKeyboardMarkup(keyboard,resize_keyboard=True)
+main_markup = ReplyKeyboardMarkup(main_keyboard,resize_keyboard=True)
+
+date_keyboard = [
+["📅 Today","📅 Tomorrow"],
+["✏ Custom Date"]
+]
+
+date_markup = ReplyKeyboardMarkup(date_keyboard,resize_keyboard=True)
+
+time_keyboard = [
+["🕕 6:00 PM","🕖 7:00 PM"],
+["🕗 8:00 PM","🕘 9:00 PM"],
+["✏ Custom Time"]
+]
+
+time_markup = ReplyKeyboardMarkup(time_keyboard,resize_keyboard=True)
 
 TASK, DATE, TIME = range(3)
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Hello Rohith! Task Manager Ready.",
-        reply_markup=reply_markup
+        reply_markup=main_markup
     )
 
 async def add_task_start(update:Update,context:ContextTypes.DEFAULT_TYPE):
@@ -47,12 +63,34 @@ async def add_task_start(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
 async def task_name(update:Update,context:ContextTypes.DEFAULT_TYPE):
     context.user_data["task"]=update.message.text
-    await update.message.reply_text("Date enter pannunga (YYYY-MM-DD):")
+
+    await update.message.reply_text(
+        "Date select pannunga:",
+        reply_markup=date_markup
+    )
+
     return DATE
 
 async def task_date(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    context.user_data["date"]=update.message.text
-    await update.message.reply_text("Time enter pannunga (HH:MM):")
+
+    text=update.message.text
+
+    if text=="📅 Today":
+        date=datetime.now().strftime("%Y-%m-%d")
+
+    elif text=="📅 Tomorrow":
+        date=(datetime.now()+timedelta(days=1)).strftime("%Y-%m-%d")
+
+    else:
+        date=text
+
+    context.user_data["date"]=date
+
+    await update.message.reply_text(
+        "Time select pannunga:",
+        reply_markup=time_markup
+    )
+
     return TIME
 
 async def task_time(update:Update,context:ContextTypes.DEFAULT_TYPE):
@@ -68,17 +106,24 @@ async def task_time(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-    await update.message.reply_text("Task added successfully!")
+    await update.message.reply_text(
+        "Task added successfully!",
+        reply_markup=main_markup
+    )
+
     return ConversationHandler.END
 
 async def today_tasks(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
+    today=datetime.now().strftime("%Y-%m-%d")
+
     rows=c.execute(
-        "SELECT task,time FROM tasks WHERE status='pending'"
+        "SELECT task,time FROM tasks WHERE date=? AND status='pending'",
+        (today,)
     ).fetchall()
 
     if not rows:
-        await update.message.reply_text("No pending tasks")
+        await update.message.reply_text("No tasks for today")
         return
 
     msg="Today's Tasks\n\n"
@@ -97,7 +142,7 @@ async def all_tasks(update:Update,context:ContextTypes.DEFAULT_TYPE):
     msg="All Tasks\n\n"
 
     for r in rows:
-        msg+=f"{r[0]}. {r[1]} {r[2]} {r[3]} ({r[4]})\n"
+        msg+=f"{r[0]}. {r[1]} | {r[2]} | {r[3]} ({r[4]})\n"
 
     await update.message.reply_text(msg)
 
@@ -119,7 +164,7 @@ async def mark_done(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("Task completed!")
 
-async def message_router(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def router(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
     text=update.message.text
 
@@ -135,7 +180,7 @@ async def message_router(update:Update,context:ContextTypes.DEFAULT_TYPE):
     else:
         await mark_done(update,context)
 
-conv_handler = ConversationHandler(
+conv_handler=ConversationHandler(
 
 entry_points=[MessageHandler(filters.TEXT & filters.Regex("➕ Add Task"),add_task_start)],
 
@@ -150,15 +195,12 @@ TIME:[MessageHandler(filters.TEXT,task_time)]
 },
 
 fallbacks=[]
-
 )
 
 app=ApplicationBuilder().token("8602038532:AAFgGowucCDiM6MTawht2pu8xuCoDjUylFY").build()
 
 app.add_handler(CommandHandler("start",start))
-
 app.add_handler(conv_handler)
-
-app.add_handler(MessageHandler(filters.TEXT,message_router))
+app.add_handler(MessageHandler(filters.TEXT,router))
 
 app.run_polling()
